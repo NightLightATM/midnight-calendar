@@ -201,10 +201,33 @@ header.top{display:flex; align-items:center; gap:9px; padding-block:18px 10px}
 .toast{position:fixed; left:50%; bottom:96px; transform:translateX(-50%) translateY(20px); background:var(--text); color:var(--bg); font-weight:600; font-size:13.5px; padding:11px 18px; border-radius:12px; box-shadow:var(--shadow-lift); z-index:80; opacity:0; pointer-events:none; transition:.25s; max-width:calc(100% - 32px)}
 .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
 @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+.gate{position:fixed; inset:0; z-index:100; display:none; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:36px 26px; background:var(--bg)}
+.gate.show{display:flex}
+.gate .glogo{width:78px; height:78px; margin-bottom:22px; filter:drop-shadow(0 4px 22px rgba(139,144,255,.42))}
+.gate h2{font-family:var(--ff-display); font-weight:600; font-size:30px; margin:0 0 11px; letter-spacing:-.02em}
+.gate p{color:var(--muted); max-width:34ch; margin:0 0 30px; line-height:1.55}
+.gate .gsignin{display:inline-flex; align-items:center; gap:11px; border:1.5px solid var(--border-strong); background:var(--surface); color:var(--text); font-weight:700; font-size:16px; padding:14px 22px; border-radius:14px; box-shadow:var(--shadow); transition:.15s}
+.gate .gsignin:hover{background:var(--surface-2)}
+.gate .gsignin svg{width:22px; height:22px}
+.gate .skip{margin-top:18px; background:none; border:none; color:var(--muted); font-weight:600; font-size:14px; text-decoration:underline; text-underline-offset:3px}
+.gate .skip:hover{color:var(--text)}
+.gate .fine{margin-top:28px; font-size:12px; color:var(--faint); max-width:33ch; line-height:1.55}
 </style>
 </head>
 <body>
 <div class="sky"><canvas id="sky"></canvas></div>
+<div class="gate" id="gate">
+  <svg class="glogo" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+    <defs><radialGradient id="mg2" cx="35%" cy="30%" r="80%"><stop offset="0%" stop-color="#F5C36B"/><stop offset="55%" stop-color="#C9A24B"/><stop offset="100%" stop-color="#8B90FF"/></radialGradient></defs>
+    <circle cx="24" cy="24" r="15" fill="url(#mg2)"/><circle cx="30" cy="20" r="14" fill="var(--bg)"/>
+    <circle cx="14" cy="12" r="1.3" fill="#F5C36B"/><circle cx="38" cy="34" r="1.1" fill="#8B90FF"/><circle cx="10" cy="30" r="1" fill="#8B90FF"/>
+  </svg>
+  <h2>Midnight Calendar</h2>
+  <p>Sign in with Google to keep your reminders synced across your phone and computer.</p>
+  <button class="gsignin" id="gateSignIn"><svg viewBox="0 0 24 24" fill="none"><path d="M21.6 12.23c0-.68-.06-1.36-.18-2.02H12v3.82h5.4a4.62 4.62 0 0 1-2 3.03v2.5h3.24c1.9-1.75 2.96-4.33 2.96-7.33z" fill="#4285F4"/><path d="M12 22c2.7 0 4.96-.9 6.62-2.43l-3.24-2.5c-.9.6-2.05.95-3.38.95-2.6 0-4.8-1.75-5.58-4.11H3.06v2.58A10 10 0 0 0 12 22z" fill="#34A853"/><path d="M6.42 13.9a6 6 0 0 1 0-3.82V7.5H3.06a10 10 0 0 0 0 9z" fill="#FBBC05"/><path d="M12 5.98c1.47 0 2.79.5 3.83 1.5l2.87-2.87A10 10 0 0 0 3.06 7.5l3.36 2.58C7.2 7.73 9.4 5.98 12 5.98z" fill="#EA4335"/></svg>Sign in with Google</button>
+  <button class="skip" id="gateSkip">Use on this device only</button>
+  <div class="fine">Your reminders are stored in one private file in your own Google Drive. Nothing else in your Drive is accessed.</div>
+</div>
 <div class="wrap">
   <header class="top">
     <div class="brand">
@@ -348,8 +371,9 @@ let calCursor=new Date(); calCursor.setDate(1); calCursor.setHours(0,0,0,0);
 let editingId=null, draftType="once";
 const notifyLog={};
 let swReg=null;
+const GOOGLE_CLIENT_ID="1061358657792-44vhgbbmjlrfftuk2j1urqnedmv6e50b.apps.googleusercontent.com";
 const G={
-  clientId:localStorage.getItem("mc-client-id")||"",
+  clientId:GOOGLE_CLIENT_ID||localStorage.getItem("mc-client-id")||"",
   scope:"https://www.googleapis.com/auth/drive.file",
   token:null, exp:0, client:null,
   fileId:localStorage.getItem("mc-file-id")||null,
@@ -473,28 +497,31 @@ async function drivePush(){
 }
 function schedulePush(){if(!G.connected)return;clearTimeout(G.pushTimer);G.pushTimer=setTimeout(drivePush,1200);}
 async function connectDrive(){
-  const id=$("#f-clientid").value.trim();
-  if(!id){toast("Paste your Google OAuth Client ID first");$("#f-clientid").focus();return;}
-  G.clientId=id;localStorage.setItem("mc-client-id",id);G.client=null;
+  const fieldEl=$("#f-clientid");
+  const fieldId=fieldEl?fieldEl.value.trim():"";
+  const id=GOOGLE_CLIENT_ID||fieldId||G.clientId||localStorage.getItem("mc-client-id")||"";
+  if(!id){hideGate();$("#settingsScrim").classList.add("show");renderGoogle();toast("Add your Google Client ID to enable sign-in");if(fieldEl)fieldEl.focus();return;}
+  G.clientId=id;if(!GOOGLE_CLIENT_ID)localStorage.setItem("mc-client-id",id);G.client=null;
   if(!gisLoaded()){toast("Google sign-in still loading - try again in a moment");return;}
   toast("Opening Google sign-in…");
   try{
     await getToken(true);
-    G.connected=true;localStorage.setItem("mc-g-connected","1");
+    G.connected=true;localStorage.setItem("mc-g-connected","1");localStorage.removeItem("mc-gate-dismissed");
     await drivePull();
     await drivePush();
+    hideGate();$("#settingsScrim").classList.remove("show");
     renderGoogle();setSync("drive");
-    toast("Connected - synced to your Google Drive");
+    toast("Signed in - synced to your Google Drive");
   }catch(e){
     G.connected=false;localStorage.setItem("mc-g-connected","0");
     setSync("local");renderGoogle();
-    toast("Couldn't connect. Check the Client ID and that this origin is authorized.");
+    toast("Couldn't sign in. Check the Client ID and that this origin is an authorized JavaScript origin.");
   }
 }
 function disconnectDrive(){
   try{if(G.token&&gisLoaded())google.accounts.oauth2.revoke(G.token,()=>{});}catch(e){}
-  G.connected=false;G.token=null;localStorage.setItem("mc-g-connected","0");
-  renderGoogle();setSync("local");toast("Disconnected from Google Drive");
+  G.connected=false;G.token=null;localStorage.setItem("mc-g-connected","0");localStorage.removeItem("mc-gate-dismissed");
+  renderGoogle();setSync("local");toast("Signed out of Google Drive");
 }
 function renderGoogle(){
   const on=G.connected;
@@ -502,8 +529,9 @@ function renderGoogle(){
   $("#gStatusText").textContent=on?"Connected - reminders sync to a private file in your Google Drive.":"Not connected - reminders are saved on this device only.";
   $("#connectLabel").textContent=on?"Reconnect / refresh":"Connect Google Drive";
   $("#disconnectBtn").style.display=on?"block":"none";
-  $("#f-clientid").value=G.clientId;
-  $("#clientIdField").style.display=on?"none":"block";
+  $("#f-clientid").value=GOOGLE_CLIENT_ID?"":(localStorage.getItem("mc-client-id")||"");
+  $("#clientIdField").style.display=(on||GOOGLE_CLIENT_ID)?"none":"block";
+  $("#connectLabel").textContent=on?"Reconnect / switch account":"Sign in with Google";
   try{$("#originHint").textContent=location.origin;}catch(e){}
 }
 function setSync(mode){
@@ -692,6 +720,10 @@ function seedSamples(){
   ];
   saveLocal();
 }
+function gateNeeded(){return !G.connected && localStorage.getItem("mc-gate-dismissed")!=="1";}
+function showGate(){$("#gate").classList.add("show");}
+function hideGate(){$("#gate").classList.remove("show");}
+function gateSkip(){localStorage.setItem("mc-gate-dismissed","1");hideGate();}
 function wire(){
   document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>setView(b.dataset.view)));
   $("#fab").addEventListener("click",()=>openSheet(null));
@@ -706,6 +738,8 @@ function wire(){
   $("#settingsScrim").addEventListener("click",e=>{if(e.target===$("#settingsScrim"))$("#settingsScrim").classList.remove("show");});
   $("#connectBtn").addEventListener("click",connectDrive);
   $("#disconnectBtn").addEventListener("click",disconnectDrive);
+  $("#gateSignIn").addEventListener("click",connectDrive);
+  $("#gateSkip").addEventListener("click",gateSkip);
   document.addEventListener("keydown",e=>{if(e.key==="Escape"){$("#scrim").classList.remove("show");$("#settingsScrim").classList.remove("show");}});
   document.body.addEventListener("click",e=>{
     const tg=e.target.closest('[data-act="toggle"]'),ed=e.target.closest('[data-act="edit"]');
@@ -740,6 +774,7 @@ function boot(){
   wire();renderAll();updateBell();starfield();installFallbackHint();
   writeSnapshot();initSW();
   renderGoogle();
+  if(gateNeeded())showGate();
   if(G.connected){setSync("drive");setTimeout(()=>{drivePull().catch(()=>setSync("err"));},800);}else setSync("local");
   if(notifState()==="granted"){registerPeriodicSync();refreshNotifications();}
 }
