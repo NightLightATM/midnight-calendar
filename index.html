@@ -359,7 +359,7 @@ header.top{display:flex; align-items:center; gap:9px; padding-block:18px 10px}
 <script>
 "use strict";
 const LS_KEY="midnight-calendar-v1", LS_THEME="midnight-theme", LS_NOTIF_DISMISS="midnight-notif-dismissed";
-const CACHE_NAME="midnight-cal-v1";
+const CACHE_NAME="midnight-cal-v2";
 const WEEKDAYS=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const WEEKDAYS_S=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -375,7 +375,7 @@ const GOOGLE_CLIENT_ID="1061358657792-44vhgbbmjlrfftuk2j1urqnedmv6e50b.apps.goog
 const G={
   clientId:GOOGLE_CLIENT_ID||localStorage.getItem("mc-client-id")||"",
   scope:"https://www.googleapis.com/auth/drive.file",
-  token:null, exp:0, client:null,
+  token:localStorage.getItem("mc-token")||null, exp:Number(localStorage.getItem("mc-token-exp"))||0, client:null,
   fileId:localStorage.getItem("mc-file-id")||null,
   connected:localStorage.getItem("mc-g-connected")==="1",
   _resolve:null, _reject:null, pushTimer:null
@@ -430,6 +430,7 @@ function initGClient(){
       client_id:G.clientId, scope:G.scope,
       callback:resp=>{
         if(resp&&resp.access_token){G.token=resp.access_token;G.exp=Date.now()+((resp.expires_in?resp.expires_in-60:3000)*1000);
+          try{localStorage.setItem("mc-token",G.token);localStorage.setItem("mc-token-exp",String(G.exp));}catch(e){}
           if(G._resolve){G._resolve(G.token);}}
         else if(G._reject){G._reject(new Error("no_token"));}
         G._resolve=G._reject=null;
@@ -452,7 +453,7 @@ async function driveFetch(url,opts){
   let token=await getToken(false).catch(()=>getToken(true));
   opts.headers=Object.assign({},opts.headers,{Authorization:"Bearer "+token});
   let res=await fetch(url,opts);
-  if(res.status===401){G.token=null;token=await getToken(true);opts.headers.Authorization="Bearer "+token;res=await fetch(url,opts);}
+  if(res.status===401){G.token=null;G.exp=0;try{localStorage.removeItem("mc-token");localStorage.removeItem("mc-token-exp");}catch(e){}token=await getToken(true);opts.headers.Authorization="Bearer "+token;res=await fetch(url,opts);}
   return res;
 }
 function multipart(meta,content){
@@ -476,7 +477,7 @@ async function driveEnsureFile(){
 function mergeRemote(arr){
   const map={};state.reminders.forEach(r=>map[r.id]=r);
   arr.forEach(rm=>{const l=map[rm.id];if(!l||(rm.updatedAt||0)>(l.updatedAt||0))map[rm.id]=rm;});
-  state.reminders=Object.values(map);
+  state.reminders=Object.values(map).filter(r=>!r.sample);
   saveLocal();writeSnapshot();renderAll();refreshNotifications();
 }
 async function drivePull(){
@@ -485,6 +486,7 @@ async function drivePull(){
   if(!res.ok)return;
   let remote;try{remote=await res.json();}catch(e){remote=null;}
   if(remote&&Array.isArray(remote.reminders))mergeRemote(remote.reminders);
+  setSync("drive");
 }
 async function drivePush(){
   if(!G.connected)return;
@@ -520,7 +522,7 @@ async function connectDrive(){
 }
 function disconnectDrive(){
   try{if(G.token&&gisLoaded())google.accounts.oauth2.revoke(G.token,()=>{});}catch(e){}
-  G.connected=false;G.token=null;localStorage.setItem("mc-g-connected","0");localStorage.removeItem("mc-gate-dismissed");
+  G.connected=false;G.token=null;G.exp=0;localStorage.setItem("mc-g-connected","0");localStorage.removeItem("mc-gate-dismissed");localStorage.removeItem("mc-token");localStorage.removeItem("mc-token-exp");
   renderGoogle();setSync("local");toast("Signed out of Google Drive");
 }
 function renderGoogle(){
@@ -532,19 +534,21 @@ function renderGoogle(){
   $("#f-clientid").value=GOOGLE_CLIENT_ID?"":(localStorage.getItem("mc-client-id")||"");
   $("#clientIdField").style.display=(on||GOOGLE_CLIENT_ID)?"none":"block";
   $("#connectLabel").textContent=on?"Reconnect / switch account":"Sign in with Google";
+  const helpEl=document.querySelector(".help");if(helpEl)helpEl.style.display=GOOGLE_CLIENT_ID?"none":"block";
   try{$("#originHint").textContent=location.origin;}catch(e){}
 }
 function setSync(mode){
   const b=$("#syncBadge"),t=$("#syncText");
   b.classList.remove("local","err");
   if(mode==="drive"){t.textContent="Synced to Google Drive";}
+  else if(mode==="reconnect"){b.classList.add("err");t.textContent="Tap here to reconnect Google";}
   else if(mode==="err"){b.classList.add("err");t.textContent="Drive sync error - will retry";}
   else{b.classList.add("local");t.textContent="Saved on this device";}
 }
 function upsert(r){r.updatedAt=Date.now();const i=state.reminders.findIndex(x=>x.id===r.id);if(i>=0)state.reminders[i]=r;else state.reminders.push(r);persist();renderAll();}
 function removeReminder(id){
   const i=state.reminders.findIndex(x=>x.id===id);if(i<0)return;
-  if(G.connected)state.reminders[i]={...state.reminders[i],deleted:true,updatedAt:Date.now()};
+  if(G.connected && !state.reminders[i].sample)state.reminders[i]={...state.reminders[i],deleted:true,updatedAt:Date.now()};
   else state.reminders.splice(i,1);
   persist();renderAll();
 }
@@ -709,17 +713,6 @@ function installFallbackHint(){
   if(standalone||$("#installHint").innerHTML)return;
   $("#installHint").innerHTML='Tip: on Android, browser menu ⋮ → <b>Add to Home screen</b> to keep Midnight one tap away.';
 }
-function seedSamples(){
-  const now=new Date();const inDays=n=>{const d=new Date(now);d.setDate(d.getDate()+n);return dayKey(d);};
-  state.reminders=[
-    {id:uid(),title:"Leg day workout",type:"weekly",weekday:1,time:"07:30",completed:{},sample:true,createdAt:Date.now(),updatedAt:Date.now()},
-    {id:uid(),title:"Upper body workout",type:"weekly",weekday:4,time:"07:30",completed:{},sample:true,createdAt:Date.now(),updatedAt:Date.now()},
-    {id:uid(),title:"Change the water filter",type:"monthly",day:1,time:"10:00",completed:{},sample:true,createdAt:Date.now(),updatedAt:Date.now()},
-    {id:uid(),title:"Mom's birthday 🎂",type:"yearly",month:5,day:14,time:"09:00",completed:{},sample:true,createdAt:Date.now(),updatedAt:Date.now()},
-    {id:uid(),title:"Dentist appointment",type:"once",date:inDays(2),time:"15:00",completed:{},sample:true,createdAt:Date.now(),updatedAt:Date.now()}
-  ];
-  saveLocal();
-}
 function gateNeeded(){return !G.connected && localStorage.getItem("mc-gate-dismissed")!=="1";}
 function showGate(){$("#gate").classList.add("show");}
 function hideGate(){$("#gate").classList.remove("show");}
@@ -734,6 +727,8 @@ function wire(){
   document.querySelectorAll("#typeGrid button").forEach(b=>b.addEventListener("click",()=>setDraftType(b.dataset.type,editingId?state.reminders.find(x=>x.id===editingId):null)));
   $("#f-title").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();saveFromSheet();}});
   $("#settingsBtn").addEventListener("click",()=>{renderGoogle();$("#settingsScrim").classList.add("show");});
+  $("#syncBadge").style.cursor="pointer";
+  $("#syncBadge").addEventListener("click",()=>{renderGoogle();$("#settingsScrim").classList.add("show");});
   $("#settingsDone").addEventListener("click",()=>$("#settingsScrim").classList.remove("show"));
   $("#settingsScrim").addEventListener("click",e=>{if(e.target===$("#settingsScrim"))$("#settingsScrim").classList.remove("show");});
   $("#connectBtn").addEventListener("click",connectDrive);
@@ -770,12 +765,12 @@ function starfield(){
 function boot(){
   initTheme();
   try{$("#tzlabel").textContent=Intl.DateTimeFormat().resolvedOptions().timeZone.replace(/_/g," ")+" time";}catch(e){}
-  const had=loadLocal();if(!had||!state.reminders.length)seedSamples();
+  loadLocal();state.reminders=state.reminders.filter(r=>!r.sample);saveLocal();
   wire();renderAll();updateBell();starfield();installFallbackHint();
   writeSnapshot();initSW();
   renderGoogle();
   if(gateNeeded())showGate();
-  if(G.connected){setSync("drive");setTimeout(()=>{drivePull().catch(()=>setSync("err"));},800);}else setSync("local");
+  if(G.connected){const valid=G.token&&Date.now()<G.exp;setSync(valid?"drive":"reconnect");setTimeout(()=>{drivePull().catch(()=>setSync("reconnect"));},800);}else setSync("local");
   if(notifState()==="granted"){registerPeriodicSync();refreshNotifications();}
 }
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot);else boot();
